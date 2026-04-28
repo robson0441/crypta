@@ -1,0 +1,6 @@
+{
+  "name": "Crypta",
+  "description": "A privacy-focused, account-less messaging app with E2EE and Crypta-ID identity system.",
+  "requestFramePermissions": ["microphone", "camera"],
+  "majorCapabilities": ["real-time messaging", "E2EE", "account-less identity"]
+}
