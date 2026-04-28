@@ -160,7 +160,8 @@ export default function App() {
 
     socket.on('webrtc:signal', async (data: { from: string, signal: any }) => {
       if (!peerConnectionRef.current) {
-        pendingSignalsRef.current.push(data.signal);
+        console.log('Queuing signal as PC not ready');
+        pendingSignalsRef.current.push({ from: data.from, signal: data.signal });
         return;
       }
 
@@ -407,7 +408,7 @@ export default function App() {
 
     } catch (err) {
       console.error('Error starting call:', err);
-      alert('Não foi possível acessar seu microfone/câmera.');
+      alert('Não foi possível acessar seu microfone/câmera. Se estiver no modo de visualização, tente abrir o app em uma nova aba.');
       cleanupCall();
     }
   };
@@ -449,7 +450,8 @@ export default function App() {
       peerConnectionRef.current = pc;
 
       // Processing pending signals if any
-      for (const signal of pendingSignalsRef.current) {
+      for (const pending of pendingSignalsRef.current) {
+        const { signal } = pending;
         if (signal.type === 'offer') {
           await pc.setRemoteDescription(new RTCSessionDescription(signal));
           const answer = await pc.createAnswer();
@@ -469,7 +471,7 @@ export default function App() {
 
     } catch (err) {
       console.error('Error accepting call:', err);
-      alert('Erro ao acessar microfone/câmera.');
+      alert('Erro ao acessar microfone/câmera. Tente abrir o app em uma nova aba.');
       handleRejectCall();
     }
   };

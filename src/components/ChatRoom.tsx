@@ -144,7 +144,7 @@ export default function ChatRoom({ recipientId, currentUserId, session, messages
     } catch (err) {
       console.error('Error starting recording:', err);
       if (err instanceof Error && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
-        alert('Permissão de microfone negada. Por favor, habilite o acesso para gravar áudios.');
+        alert('Permissão de microfone negada. Se você estiver usando o modo de visualização, tente abrir o aplicativo em uma nova aba. Caso contrário, verifique as configurações de privacidade do seu navegador.');
       } else {
         alert('Não foi possível iniciar a gravação de áudio.');
       }
