@@ -36,6 +36,8 @@ export interface CallState {
   remoteId?: string;
   remoteName?: string;
   remoteAvatar?: string;
+  remoteStream?: MediaStream | null;
+  localStream?: MediaStream | null;
 }
 
 export interface ChatSession {

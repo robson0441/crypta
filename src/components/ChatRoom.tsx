@@ -97,8 +97,21 @@ export default function ChatRoom({ recipientId, currentUserId, session, messages
 
   const startRecording = async () => {
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Seu navegador não suporta gravação de áudio.');
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      
+      // Determine supported mime type
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') 
+        ? 'audio/webm' 
+        : MediaRecorder.isTypeSupported('audio/ogg')
+          ? 'audio/ogg'
+          : '';
+
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
 
@@ -107,7 +120,9 @@ export default function ChatRoom({ recipientId, currentUserId, session, messages
       };
 
       recorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        if (audioChunksRef.current.length === 0) return;
+        
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType || 'audio/wav' });
         const reader = new FileReader();
         reader.onload = (e) => {
           const base64 = e.target?.result as string;
@@ -121,11 +136,19 @@ export default function ChatRoom({ recipientId, currentUserId, session, messages
       recorder.start();
       setIsRecording(true);
       setRecordingDuration(0);
+      
+      if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = window.setInterval(() => {
         setRecordingDuration(prev => prev + 1);
       }, 1000);
     } catch (err) {
       console.error('Error starting recording:', err);
+      if (err instanceof Error && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
+        alert('Permissão de microfone negada. Por favor, habilite o acesso para gravar áudios.');
+      } else {
+        alert('Não foi possível iniciar a gravação de áudio.');
+      }
+      setIsRecording(false);
     }
   };
 

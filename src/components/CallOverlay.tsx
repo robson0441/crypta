@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Phone, Video, X, PhoneOff, User as UserIcon, Mic, MicOff, VideoOff, Volume2 } from 'lucide-react';
 import type { CallState } from '../types';
@@ -10,7 +11,35 @@ interface CallOverlayProps {
 }
 
 export default function CallOverlay({ call, onAccept, onReject, onHangup }: CallOverlayProps) {
+  const [duration, setDuration] = useState(0);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    let interval: number;
+    if (call.status === 'active') {
+      interval = window.setInterval(() => {
+        setDuration(prev => prev + 1);
+      }, 1000);
+    } else {
+      setDuration(0);
+    }
+    return () => clearInterval(interval);
+  }, [call.status]);
+
+  useEffect(() => {
+    if (call.remoteStream && audioRef.current) {
+      audioRef.current.srcObject = call.remoteStream;
+      audioRef.current.play().catch(err => console.error('Error playing remote audio:', err));
+    }
+  }, [call.remoteStream]);
+
   if (call.status === 'idle') return null;
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   return (
     <AnimatePresence>
@@ -21,6 +50,8 @@ export default function CallOverlay({ call, onAccept, onReject, onHangup }: Call
         transition={{ type: 'spring', damping: 25, stiffness: 200 }}
         className="fixed inset-0 z-[100] bg-[#0b141a] flex flex-col items-center justify-between py-20 px-6 text-[#e9edef]"
       >
+        <audio ref={audioRef} autoPlay />
+        
         {/* Background Gradient/Pattern */}
         <div className="absolute inset-0 bg-gradient-to-b from-[#121b22] to-black opacity-50 -z-10" />
 
@@ -34,18 +65,23 @@ export default function CallOverlay({ call, onAccept, onReject, onHangup }: Call
                 <UserIcon className="w-16 h-16 text-[#cfd3d6]" />
               )}
             </div>
-            {call.status === 'incoming' && (
+            {(call.status === 'incoming' || call.status === 'outgoing') && (
               <div className="absolute -inset-4 border-2 border-[#00a884] rounded-full animate-ping opacity-20" />
             )}
           </div>
           
           <div className="text-center">
             <h2 className="text-2xl font-medium mb-1">{call.remoteName || call.remoteId}</h2>
-            <p className="text-[#8696a0] text-sm font-medium uppercase tracking-[0.2em]">
+            <p className="text-[#8696a0] text-sm font-medium uppercase tracking-[0.2em] mb-2">
               {call.status === 'incoming' ? 'Chamada de entrada' : 
-               call.status === 'outgoing' ? 'Chamada de saída' : 
+               call.status === 'outgoing' ? 'Ligando...' : 
                'Chamada ativa'}
             </p>
+            {call.status === 'active' && (
+              <p className="text-[#00a884] font-mono text-lg tabular-nums animate-pulse">
+                {formatDuration(duration)}
+              </p>
+            )}
           </div>
         </div>
 

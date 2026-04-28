@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import Onboarding from './components/Onboarding';
 import ChatList from './components/ChatList';
@@ -16,6 +16,27 @@ export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [typingUsers, setTypingUsers] = useState<Record<string, boolean>>({});
   const [callState, setCallState] = useState<CallState>({ status: 'idle' });
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const pendingSignalsRef = useRef<any[]>([]);
+
+  const cleanupCall = useCallback(() => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+    if (remoteStreamRef.current) {
+      remoteStreamRef.current.getTracks().forEach(track => track.stop());
+      remoteStreamRef.current = null;
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    pendingSignalsRef.current = [];
+    setCallState({ status: 'idle' });
+  }, []);
 
   // Persist identity
   useEffect(() => {
@@ -137,16 +158,57 @@ export default function App() {
       });
     });
 
-    socket.on('call:accepted', () => {
+    socket.on('webrtc:signal', async (data: { from: string, signal: any }) => {
+      if (!peerConnectionRef.current) {
+        pendingSignalsRef.current.push(data.signal);
+        return;
+      }
+
+      try {
+        if (data.signal.type === 'offer') {
+          await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.signal));
+          const answer = await peerConnectionRef.current.createAnswer();
+          await peerConnectionRef.current.setLocalDescription(answer);
+          socket.emit('webrtc:signal', {
+            to: data.from,
+            from: identity.cryptaId,
+            signal: answer
+          });
+        } else if (data.signal.type === 'answer') {
+          await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.signal));
+        } else if (data.signal.type === 'candidate') {
+          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
+        }
+      } catch (err) {
+        console.error('Error handling WebRTC signal:', err);
+      }
+    });
+
+    socket.on('call:accepted', async (data: { from: string }) => {
+      // Caller side receives acceptance
+      if (!peerConnectionRef.current || !localStreamRef.current) return;
+      
       setCallState(prev => ({ ...prev, status: 'active' }));
+      
+      try {
+        const offer = await peerConnectionRef.current.createOffer();
+        await peerConnectionRef.current.setLocalDescription(offer);
+        socket.emit('webrtc:signal', {
+          to: data.from,
+          from: identity.cryptaId,
+          signal: offer
+        });
+      } catch (err) {
+        console.error('Error creating offer:', err);
+      }
     });
 
     socket.on('call:rejected', () => {
-      setCallState({ status: 'idle' });
+      cleanupCall();
     });
 
     socket.on('call:ended', () => {
-      setCallState({ status: 'idle' });
+      cleanupCall();
     });
 
     return () => {
@@ -295,48 +357,138 @@ export default function App() {
     setIsSettingsOpen(false);
   };
 
-  const handleStartCall = (to: string, type: CallType) => {
+  const handleStartCall = async (to: string, type: CallType) => {
     if (!identity) return;
     const socket = getSocket();
     
-    setCallState({
-      status: 'outgoing',
-      type,
-      remoteId: to,
-    });
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: true, 
+        video: type === 'video' 
+      });
+      
+      localStreamRef.current = stream;
+      setCallState({
+        status: 'outgoing',
+        type,
+        remoteId: to,
+        localStream: stream
+      });
 
-    socket.emit('call:request', {
-      to,
-      from: identity.cryptaId,
-      type,
-      callerName: identity.name,
-      callerAvatar: identity.avatar
-    });
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('webrtc:signal', {
+            to,
+            from: identity.cryptaId,
+            signal: { type: 'candidate', candidate: event.candidate }
+          });
+        }
+      };
+
+      pc.ontrack = (event) => {
+        remoteStreamRef.current = event.streams[0];
+        setCallState(prev => ({ ...prev, remoteStream: event.streams[0] }));
+      };
+
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      peerConnectionRef.current = pc;
+
+      socket.emit('call:request', {
+        to,
+        from: identity.cryptaId,
+        type,
+        callerName: identity.name,
+        callerAvatar: identity.avatar
+      });
+
+    } catch (err) {
+      console.error('Error starting call:', err);
+      alert('Não foi possível acessar seu microfone/câmera.');
+      cleanupCall();
+    }
   };
 
-  const handleAcceptCall = () => {
-    if (!identity || !callState.remoteId) return;
+  const handleAcceptCall = async () => {
+    if (!identity || !callState.remoteId || !callState.type) return;
     const socket = getSocket();
-    setCallState(prev => ({ ...prev, status: 'active' }));
-    socket.emit('call:accept', { to: callState.remoteId, from: identity.cryptaId });
+    const targetId = callState.remoteId;
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: true, 
+        video: callState.type === 'video' 
+      });
+
+      localStreamRef.current = stream;
+      setCallState(prev => ({ ...prev, status: 'active', localStream: stream }));
+
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('webrtc:signal', {
+            to: targetId,
+            from: identity.cryptaId,
+            signal: { type: 'candidate', candidate: event.candidate }
+          });
+        }
+      };
+
+      pc.ontrack = (event) => {
+        remoteStreamRef.current = event.streams[0];
+        setCallState(prev => ({ ...prev, remoteStream: event.streams[0] }));
+      };
+
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+      peerConnectionRef.current = pc;
+
+      // Processing pending signals if any
+      for (const signal of pendingSignalsRef.current) {
+        if (signal.type === 'offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          socket.emit('webrtc:signal', {
+            to: targetId,
+            from: identity.cryptaId,
+            signal: answer
+          });
+        } else if (signal.type === 'candidate') {
+          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        }
+      }
+      pendingSignalsRef.current = [];
+
+      socket.emit('call:accept', { to: targetId, from: identity.cryptaId });
+
+    } catch (err) {
+      console.error('Error accepting call:', err);
+      alert('Erro ao acessar microfone/câmera.');
+      handleRejectCall();
+    }
   };
 
   const handleRejectCall = () => {
     if (!identity || !callState.remoteId) return;
     const socket = getSocket();
-    setCallState({ status: 'idle' });
-    socket.emit('call:reject', { to: callState.remoteId, from: identity.cryptaId });
+    const targetId = callState.remoteId;
+    socket.emit('call:reject', { to: targetId, from: identity.cryptaId });
+    cleanupCall();
   };
 
   const handleHangup = () => {
     const socket = getSocket();
     const targetId = callState.remoteId;
-    
-    setCallState({ status: 'idle' });
-    
     if (identity && targetId) {
       socket.emit('call:hangup', { to: targetId, from: identity.cryptaId });
     }
+    cleanupCall();
   };
 
   if (!identity) {

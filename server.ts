@@ -14,7 +14,7 @@ async function startServer() {
     }
   });
 
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // In-memory registry for Crypta-IDs to socket IDs
   // In a real app, this would be a distributed cache like Redis or a DB
